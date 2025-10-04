@@ -7,65 +7,49 @@
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"/>
 <style>
-    body {
-        background-color: #f8f9fa;
-    }
-    .station-card {
-        margin-bottom: 10px;
-        padding: 10px;
-        border-radius: 8px;
-        background-color: white;
-        position: relative;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-    .station-current {
-        border-left: 4px solid #0d6efd;
-        background-color: #e7f1ff;
-    }
-    .station-symbol {
-        width: 30px;
-        text-align: center;
-        font-size: 20px;
-    }
-    .station-info {
-        flex: 1;
-    }
-    .station-name {
-        font-weight: bold;
-        font-size: 16px;
-    }
-    .station-time {
-        font-size: 14px;
-        color: #555;
-    }
-    .delay {
-        color: red;
-        font-weight: bold;
-        margin-left: 5px;
-    }
+body { background-color: #f8f9fa; }
+.station-card { margin-bottom: 12px; padding: 12px; border-radius: 8px; background-color: #fff; display: flex; align-items: center; gap: 12px; transition: background 0.3s, transform 0.2s; }
+.station-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+.station-current { border-left: 4px solid #0d6efd; background-color: #e7f1ff; }
+.station-symbol { width: 30px; text-align: center; font-size: 20px; }
+.station-info { flex: 1; }
+.station-name { font-weight: 600; font-size: 16px; }
+.station-time { font-size: 14px; color: #555; }
+.delay { color: red; font-weight: bold; margin-left: 5px; }
+.loader { border: 4px solid #f3f3f3; border-top: 4px solid #0d6efd; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; margin: 0 auto; }
+@keyframes spin { 0% { transform: rotate(0deg);} 100% { transform: rotate(360deg);} }
+.autocomplete-suggestions { position: absolute; background: #fff; border: 1px solid #ddd; max-height: 200px; overflow-y: auto; width: 100%; z-index: 1000; border-radius: 4px; }
+.autocomplete-suggestion { padding: 8px; cursor: pointer; }
+.autocomplete-suggestion:hover { background-color: #f1f1f1; }
 </style>
 </head>
 <body>
 <div class="container">
     <h1 class="text-center mt-4">Live Train Status</h1>
 
-    <div class="row mt-4 mb-3 g-2">
-        <div class="col-md-2">
-            <input type="text" id="trainNo" class="form-control" placeholder="Train Number">
+    <div class="row mt-4 mb-3 g-2 position-relative">
+        <!-- Train Number/Name -->
+        <div class="col-6 col-md-2 position-relative">
+            <input type="text" id="trainNo" class="form-control" placeholder="Train No/Name" autocomplete="off">
+            <div id="trainSuggestions" class="autocomplete-suggestions"></div>
         </div>
-        <div class="col-md-2">
-            <input type="text" id="fromStn" class="form-control" placeholder="From Station">
+        <!-- From Station -->
+        <div class="col-6 col-md-2 position-relative">
+            <input type="text" id="fromStn" class="form-control" placeholder="From Station" autocomplete="off">
+            <div id="fromSuggestions" class="autocomplete-suggestions"></div>
         </div>
-        <div class="col-md-2">
-            <input type="text" id="toStn" class="form-control" placeholder="To Station">
+        <!-- To Station -->
+        <div class="col-6 col-md-2 position-relative">
+            <input type="text" id="toStn" class="form-control" placeholder="To Station" autocomplete="off">
+            <div id="toSuggestions" class="autocomplete-suggestions"></div>
         </div>
-        <div class="col-md-3">
+        <!-- Date -->
+        <div class="col-6 col-md-3">
             <input type="date" id="trainDate" class="form-control" value="<?php echo date('Y-m-d'); ?>">
         </div>
-        <div class="col-md-3">
-            <button class="btn btn-primary w-100" onclick="getTrainStatus()">Get Status</button>
+        <!-- Button -->
+        <div class="col-12 col-md-3">
+            <button id="statusBtn" class="btn btn-primary w-100" onclick="getTrainStatus()">Get Status</button>
         </div>
     </div>
 
@@ -73,37 +57,111 @@
 </div>
 
 <script>
+let fromCode = '', toCode = '', trainNumber = '';
+
+// --- Fetch stations from ixigo ---
+async function fetchStations(query) {
+    if (!query) return [];
+    try {
+        const res = await fetch(`https://www.ixigo.com/action/content/trainstation?searchFor=trainstationsLatLon&anchor=false&value=${encodeURIComponent(query)}`);
+        const data = await res.json();
+        return data || [];
+    } catch(err) {
+        console.error(err);
+        return [];
+    }
+}
+
+// --- Fetch trains from ixigo ---
+async function fetchTrains(query) {
+    if (!query) return [];
+    try {
+        const res = await fetch(`https://www.ixigo.com/action/content/trainstation?searchFor=getTrainByNameOrCode&nameOrCode=${encodeURIComponent(query)}`);
+        const data = await res.json();
+        return data || [];
+    } catch(err) {
+        console.error(err);
+        return [];
+    }
+}
+
+// --- Setup autocomplete for input ---
+function setupAutocomplete(inputId, suggestionId, setCode, fetchFunction, displayField, codeField) {
+    const input = document.getElementById(inputId);
+    const suggestionBox = document.getElementById(suggestionId);
+
+    input.addEventListener('input', async () => {
+        const query = input.value.trim();
+        if (!query) { suggestionBox.innerHTML = ''; return; }
+
+        const items = await fetchFunction(query);
+
+        suggestionBox.innerHTML = items.map(item => 
+            `<div class="autocomplete-suggestion" data-code="${item[codeField]}" data-name="${item[displayField]}" data-origin="${item.originName || ''}" data-destination="${item.destinationName || ''}">
+                ${item[displayField]}${item.originName ? ' ('+item.originName+' → '+item.destinationName+')' : ''}
+            </div>`).join('');
+
+        suggestionBox.querySelectorAll('.autocomplete-suggestion').forEach(el => {
+            el.addEventListener('click', () => {
+                input.value = el.dataset.name; // show name
+                setCode(el.dataset.code);      // store code
+                suggestionBox.innerHTML = '';
+            });
+        });
+    });
+
+    document.addEventListener('click', e => {
+        if (!suggestionBox.contains(e.target) && e.target !== input) {
+            suggestionBox.innerHTML = '';
+        }
+    });
+}
+
+// --- Initialize autocompletes ---
+setupAutocomplete('fromStn', 'fromSuggestions', code => fromCode = code, fetchStations, 'e', 'a');
+setupAutocomplete('toStn', 'toSuggestions', code => toCode = code, fetchStations, 'e', 'a');
+setupAutocomplete('trainNo', 'trainSuggestions', code => trainNumber = code, fetchTrains, 'n', 'c');
+
+// --- Fetch live train status ---
 async function getTrainStatus() {
-    const trainNo = document.getElementById('trainNo').value.trim();
-    const from = document.getElementById('fromStn').value.trim().toUpperCase();
-    const to = document.getElementById('toStn').value.trim().toUpperCase();
     const dateInput = document.getElementById('trainDate').value;
-    
-    if(!trainNo || !from || !to || !dateInput) {
-        alert("Please fill all fields!");
+    const button = document.getElementById('statusBtn');
+    const container = document.getElementById('statusContainer');
+
+    if(!trainNumber || !fromCode || !toCode || !dateInput) {
+        alert("Please fill all fields and select valid stations!");
         return;
     }
 
-    // Format date as dd-mm-yyyy
-    const dateParts = dateInput.split('-');
-    const date = `${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`;
+    const [year, month, day] = dateInput.split('-');
+    const date = `${day}-${month}-${year}`;
 
-    const url = `https://whereismytrain.in/cache/live_status?date=${date}&appVersion=7.1.5.802422502&cellinfo=404_45_9180_47662347&qid=e0e2245eed35451fb56900d2aeaa9a6c&from_day=1&wid=121379123&train_no=${trainNo}&from=${from}&to=${to}&lang=en&user=7d9f8926583d45858c45d5e6ce289fc6&sb_version=0&flow=refresh`;
+    container.innerHTML = '<div class="loader"></div>';
+    button.disabled = true;
+
+    const url = `https://whereismytrain.in/cache/live_status?date=${date}&appVersion=7.1.5.802422502&cellinfo=404_45_9180_47662347&qid=e0e2245eed35451fb56900d2aeaa9a6c&from_day=1&wid=121379123&train_no=${trainNumber}&from=${fromCode}&to=${toCode}&lang=en&user=7d9f8926583d45858c45d5e6ce289fc6&sb_version=0&flow=refresh`;
 
     try {
         const response = await fetch(url);
         if(!response.ok) throw new Error("Network error");
         const data = await response.json();
 
-        const curStn = data.curStn;
         const schedule = data.days_schedule;
-        const container = document.getElementById('statusContainer');
-        container.innerHTML = `<h4 class="mb-3">${data.train_name} (${trainNo}) - ${data.train_type}</h4>`;
-        
+        const curStn = data.curStn || '';
+        if(!schedule || !schedule.length){
+            container.innerHTML = '<p class="text-center text-danger">No schedule data available.</p>';
+            button.disabled = false;
+            return;
+        }
+
+        container.innerHTML = `<h4 class="mb-3">${data.train_name} (${trainNumber}) - ${data.train_type}</h4>`;
+
         schedule.forEach(station => {
             const isCurrent = station.station_code === curStn;
             const delay = station.delay_in_arrival || 0;
-            const delayText = delay > 0 ? `<span class="delay">Delay: ${delay} min</span>` : `(On Time)`;
+            const delayText = delay > 0 
+                ? `<span class="delay">Delay: ${delay} min</span>` 
+                : `<span class="text-success">(On Time)</span>`;
             
             const card = document.createElement('div');
             card.className = `station-card ${isCurrent ? 'station-current' : ''}`;
@@ -112,7 +170,7 @@ async function getTrainStatus() {
                     ${isCurrent ? '<i class="fa-solid fa-train"></i>' : '<i class="fa-solid fa-circle"></i>'}
                 </div>
                 <div class="station-info">
-                    <div class="station-name">${station.station_code} ${station.platform ? '- Platform ' + station.platform : ''}</div>
+                    <div class="station-name">${station.station_code}${station.platform ? ' - Platform ' + station.platform : ''}</div>
                     <div class="station-time">
                         Sch Arr: ${station.sch_arrival_time}, Act Arr: ${station.actual_arrival_time} ${delayText}<br>
                         Sch Dep: ${station.sch_departure_time}, Act Dep: ${station.actual_departure_time}
@@ -124,7 +182,9 @@ async function getTrainStatus() {
 
     } catch (err) {
         console.error(err);
-        alert("Failed to fetch train status.");
+        container.innerHTML = '<p class="text-center text-danger">Failed to fetch train status.</p>';
+    } finally {
+        button.disabled = false;
     }
 }
 </script>
